@@ -1,0 +1,127 @@
+#include <iostream>
+#include <vector>
+using namespace std;
+
+// Константы для определения количества процессов и ресурсов
+const int NUM_PROCESSES = 5; // Количество процессов
+const int NUM_RESOURCES = 3; // Количество ресурсов
+
+// Функция для вычисления потребностей процессов
+void calculateNeed(const vector<vector<int>>& max, const vector<vector<int>>& allot, vector<vector<int>>& need) {
+    // Вычисляем потребности, вычитая выделенные ресурсы из максимальных
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        for (int j = 0; j < NUM_RESOURCES; j++) {
+            need[i][j] = max[i][j] - allot[i][j]; // Потребность = Максимум - Выделено
+        }
+    }
+}
+
+// Функция для проверки, находится ли система в безопасном состоянии
+bool isSafe(const vector<int>& processes, const vector<int>& avail, const vector<vector<int>>& max, const vector<vector<int>>& allot) {
+    // Создаем матрицу потребностей
+    vector<vector<int>> need(NUM_PROCESSES, vector<int>(NUM_RESOURCES));
+    calculateNeed(max, allot, need); // Заполняем матрицу потребностей
+
+    // Вектор для отслеживания завершенности процессов
+    vector<bool> finish(NUM_PROCESSES, false);
+    // Вектор для безопасной последовательности
+    vector<int> safeSeq(NUM_PROCESSES);
+    // Вектор для отслеживания доступных ресурсов
+    vector<int> work = avail;
+
+    int count = 0; // Счетчик завершенных процессов
+    while (count < NUM_PROCESSES) {
+        bool found = false; // Флаг для нахождения безопасного процесса
+        for (int p = 0; p < NUM_PROCESSES; p++) {
+            // Проверяем, завершен ли процесс
+            if (!finish[p]) {
+                int j;
+                // Проверяем, достаточно ли доступных ресурсов для удовлетворения потребностей процесса
+                for (j = 0; j < NUM_RESOURCES; j++) {
+                    if (need[p][j] > work[j]) {
+                        break; // Не хватает ресурсов, переходим к следующему процессу
+                    }
+                }
+
+                // Если все потребности процесса удовлетворены
+                if (j == NUM_RESOURCES) {
+                    // Добавляем выделенные ресурсы к рабочему вектору
+                    for (int k = 0; k < NUM_RESOURCES; k++) {
+                        work[k] += allot[p][k];
+                    }
+                    safeSeq[count++] = p; // Добавляем процесс в безопасную последовательность
+                    finish[p] = true; // Отмечаем процесс как завершенный
+                    found = true; // Найден безопасный процесс
+                }
+            }
+        }
+
+        // Если не найден ни один безопасный процесс, система небезопасна
+        if (!found) {
+            cout << "Система находится в небезопасном состоянии" << endl;
+            return false;
+        }
+    }
+
+    // Если все процессы завершены, выводим безопасную последовательность
+    cout << "Система находится в безопасном состоянии." << endl;
+    cout << "Безопасная последовательность: ";
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        cout << safeSeq[i] << " "; // Выводим безопасную последовательность
+    }
+    cout << endl;
+
+    return true; // Система в безопасном состоянии
+}
+
+// Функция для ввода доступных ресурсов
+void inputAvailableResources(vector<int>& avail) {
+    cout << "Введите количество доступных ресурсов для каждого типа:" << endl;
+    for (int i = 0; i < NUM_RESOURCES; i++) {
+        cout << "Ресурс " << i + 1 << ": ";
+        cin >> avail[i]; // Вводим количество доступных ресурсов
+    }
+}
+
+// Функция для ввода максимальной потребности для каждого процесса
+void inputMaxResources(vector<vector<int>>& max) {
+    cout << "Введите максимальную потребность для каждого процесса по каждому ресурсу:" << endl;
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        cout << "Процесс " << i << ":" << endl;
+        for (int j = 0; j < NUM_RESOURCES; j++) {
+            cout << "Ресурс " << j + 1 << ": ";
+            cin >> max[i][j]; // Вводим максимальную потребность процесса
+        }
+    }
+}
+
+// Функция для ввода выделенных ресурсов
+void inputAllocatedResources(vector<vector<int>>& allot) {
+    cout << "Введите количество выделенных ресурсов для каждого процесса:" << endl;
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        cout << "Процесс " << i << ":" << endl;
+        for (int j = 0; j < NUM_RESOURCES; j++) {
+            cout << "Ресурс " << j + 1 << ": ";
+            cin >> allot[i][j]; // Вводим количество выделенных ресурсов
+        }
+    }
+}
+
+int main() {
+    // Векторы для хранения данных о процессах, доступных ресурсах, максимальных потребностях и выделенных ресурсах
+    vector<int> processes(NUM_PROCESSES);
+    vector<int> avail(NUM_RESOURCES);
+    vector<vector<int>> max(NUM_PROCESSES, vector<int>(NUM_RESOURCES));
+    vector<vector<int>> allot(NUM_PROCESSES, vector<int>(NUM_RESOURCES));
+
+    // Ввод данных о ресурсах и процессах
+    inputAvailableResources(avail);
+    inputMaxResources(max);
+    inputAllocatedResources(allot);
+
+    // Проверка, находится ли система в безопасном состоянии
+    isSafe(processes, avail, max, allot);
+
+    return 0; // Завершение программы
+}
+

@@ -1,0 +1,225 @@
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <mutex>
+#include <chrono>
+#include <atomic>
+#include <condition_variable>
+#include <random>
+#include <semaphore.h> // POSIX семафоры
+#include <unistd.h>    // Для sleep()
+#include <boost/thread/barrier.hpp> // Подключаем библиотеку Boost для барьеров
+
+bool is_monitor_locked = false;  // флаг, указывающий, заблокирован ли мьютекс
+const int num_threads = 10;
+const int race_length = 20;
+std::string race_track(race_length, '-');
+std::mutex mutex_lock;
+std::mutex console_mutex;  // мьютекс для синхронизации вывода в консоль
+sem_t semaphore;  // дескриптор семафора POSIX
+boost::barrier barrier(num_threads); // Создание барьера с количеством потоков
+std::atomic<int> semaphore_count(num_threads);  // атомарная переменная для управления счетчиком семафора
+std::condition_variable cv;  // стандартная переменная условия для ожидания в потоках
+std::atomic<int> atomic_counter(0);  // атомарная переменная для безопасного инкремента
+std::atomic_flag spinlock_flag = ATOMIC_FLAG_INIT;  // атомарный флаг для спин-блокировки
+
+char generate_random_char() {
+    return static_cast<char>(33 + rand() % 94);  // В диапазоне от '!' до '~' в ASCII
+}
+
+void display_race() {
+    std::unique_lock<std::mutex> lock(console_mutex);  // Используем мьютекс для синхронизации вывода
+    std::cout << race_track << std::endl;
+}
+
+// Mutex
+void race_with_mutex(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        std::unique_lock<std::mutex> lock(mutex_lock);  // создаем уникальный блокировщик для мьютекса
+        race_track[i] = generate_random_char();  // изменяем символ на треке
+        display_race();  // выводим текущее состояние
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// Semaphore
+void race_with_semaphore(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        sem_wait(&semaphore);  // Каждый поток ждет освобождения семафора
+        race_track[i] = generate_random_char();
+        display_race();
+        sem_post(&semaphore);  // освобождает семафор
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// SemaphoreSlim
+void SemaphoreSlimWait() {
+    while (semaphore_count.fetch_sub(1, std::memory_order_acquire) <= 0) {
+        std::this_thread::yield();  // Передача управления другим потокам
+    }
+}
+
+void SemaphoreSlimRelease() {
+    semaphore_count.fetch_add(1, std::memory_order_release);  // увеличение счетчика семафора
+}
+
+void race_with_semaphore_slim(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        SemaphoreSlimWait();  // Ожидание доступа к ресурсу
+        race_track[i] = generate_random_char();
+        display_race();
+        SemaphoreSlimRelease();  // Освобождение ресурса
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// SpinLock
+void SpinLock() {
+}
+
+void SpinUnlock() {
+    spinlock_flag.clear(std::memory_order_release);  // Сброс флага блокировки
+}
+
+void race_with_spinlock(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        SpinLock();  // Блокировка с использованием спин-блокировки
+        race_track[i] = generate_random_char();
+        display_race();
+        SpinUnlock();  // Снятие блокировки
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// SpinWait
+void SpinWait(int count) {
+    for (int i = 0; i < count; ++i) {
+        std::this_thread::yield();  // Пауза перед повторной проверкой блокировки
+    }
+}
+
+void race_with_spin_wait(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        while (spinlock_flag.test_and_set(std::memory_order_acquire)) {
+            SpinWait(10);  // Ожидание некоторое количество итераций перед повторной проверкой
+        }
+        race_track[i] = generate_random_char();
+        display_race();
+        spinlock_flag.clear(std::memory_order_release);  // Сброс флага спин-блокировки
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// Barrier
+void race_with_barrier(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        char symbol = generate_random_char(); // Генерация символа
+        race_track[i] = symbol;               // Изменение символа на треке
+        display_race();                       // Вывод текущего состояния гонки
+        barrier.wait();                       // Ожидание других потоков
+    }
+}
+
+// Monitor
+void MonitorEnter() {
+    std::unique_lock<std::mutex> lock(mutex_lock);
+    cv.wait(lock, [&]() { return !is_monitor_locked; });  // Ожидаем, пока монитор не разблокируется
+    is_monitor_locked = true;  // Блокируем монитор
+}
+
+void MonitorExit() {
+    std::unique_lock<std::mutex> lock(mutex_lock);
+    is_monitor_locked = false;  // Сбрасываем флаг блокировки
+    cv.notify_one();  // Уведомляем один поток, ожидающий блокировку
+}
+
+void race_with_monitor(int thread_id) {
+    for (int i = 0; i < race_length; ++i) {
+        MonitorEnter();  // Входим в монитор
+        char symbol = generate_random_char();
+        race_track[i] = symbol;
+        display_race();
+        MonitorExit();  // Выход из монитора
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+int main() {
+    // Semaphore
+    sem_init(&semaphore, 0, num_threads);  // Инициализация семафора (в Linux семафоры POSIX)
+
+    // Создание потоков
+    std::vector<std::thread> threads;
+
+    // Измерение времени выполнения
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    int n;
+    std::cout << "Choose synchronization primitive: " << std::endl;
+    std::cout << "1. Mutex" << std::endl;
+    std::cout << "2. Semaphore" << std::endl;
+    std::cout << "3. SemaphoreSlim" << std::endl;
+    std::cout << "4. Barrier" << std::endl;
+    std::cout << "5. SpinLock" << std::endl;
+    std::cout << "6. SpinWait" << std::endl;
+    std::cout << "7. Monitor" << std::endl;
+    std::cin >> n;
+
+    // Запуск потоков в зависимости от выбора синхронизационного примитива
+    if (n == 1) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_mutex, i + 1);
+        }
+    }
+    else if (n == 2) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_semaphore, i + 1);
+        }
+    }
+    else if (n == 3) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_semaphore_slim, i + 1);
+        }
+    }
+    else if (n == 4) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_barrier, i + 1);
+        }
+    }
+    else if (n == 5) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_spinlock, i + 1);
+        }
+    }
+    else if (n == 6) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_barrier, i + 1);
+        }
+    }
+    else if (n == 7) {
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(race_with_monitor, i + 1);
+        }
+    }
+    else {
+        std::cout << "Error: invalid choice" << std::endl;
+        return 0;
+    }
+
+    // Ждем завершения всех потоков
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // Измерение времени выполнения
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+    // Вывод времени выполнения
+    std::cout << "Execution time: " << duration.count() << " milliseconds" << std::endl;
+
+    // Очистка ресурсов
+    sem_destroy(&semaphore);  // Уничтожаем семафор
+
+    return 0;

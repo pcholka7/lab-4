@@ -1,0 +1,149 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <thread>
+#include <mutex>
+#include <limits>
+#include <iomanip>
+#include <random>
+#include <chrono>
+
+const double PI = 3.14159265358979323846; // Константа для числа Пи
+
+// Структура для хранения географической точки (широта и долгота)
+struct Point {
+    double latitude;  // Широта
+    double longitude; // Долгота
+};
+
+// Функция для вычисления расстояния между двумя точками на Земле 
+double haversine_distance(const Point& p1, const Point& p2) {
+    const double R = 6371.0; // Радиус Земли в километрах
+
+    // Преобразование градусов в радианы
+    double lat1 = p1.latitude * PI / 180.0;
+    double lon1 = p1.longitude * PI / 180.0;
+    double lat2 = p2.latitude * PI / 180.0;
+    double lon2 = p2.longitude * PI / 180.0;
+
+    // Вычисление разницы между координатами
+    double dlat = lat2 - lat1;
+    double dlon = lon2 - lon1;
+
+
+    double a = std::sin(dlat / 2) * std::sin(dlat / 2) +
+        std::cos(lat1) * std::cos(lat2) * std::sin(dlon / 2) * std::sin(dlon / 2);
+    double c = 2 * std::atan2(std::sqrt(a), std::sqrt(1 - a));
+
+    return R * c; // Возвращаем расстояние в километрах
+}
+
+// Функция для поиска ближайшей точки от заданной
+void find_nearest_point(const std::vector<Point>& points, const Point& target, int start_idx, int end_idx, Point& nearest_point, double& min_distance) {
+    for (int i = start_idx; i < end_idx; ++i) {
+        double distance = haversine_distance(points[i], target); // Вычисляем расстояние до целевой точки
+
+        // Если найдено новое минимальное расстояние, обновляем данные
+        if (distance < min_distance) {
+            min_distance = distance;
+            nearest_point = points[i];
+        }
+    }
+}
+
+int main() {
+    int n;  // Количество точек данных
+    int num_threads;  // Количество потоков для обработки
+    Point target;  // Целевая точка для поиска ближайшей
+
+    // Ввод данных от пользователя
+    std::cout << "Введите количество точек: ";
+    std::cin >> n;
+
+    std::cout << "Введите количество потоков: ";
+    std::cin >> num_threads;
+
+    std::cout << "Введите координаты целевой точки (широта, долгота): ";
+    std::cin >> target.latitude >> target.longitude;
+
+    // Массив для хранения сгенерированных точек
+    std::vector<Point> points(n);
+    std::random_device rd; // Генератор случайных чисел
+    std::mt19937 gen(rd()); // Инициализация генератора
+    std::uniform_real_distribution<> lat_dist(-90.0, 90.0); // Распределение для широты
+    std::uniform_real_distribution<> lon_dist(-180.0, 180.0); // Распределение для долготы
+
+    // Генерация случайных точек
+    for (auto& point : points) {
+        point.latitude = lat_dist(gen);
+        point.longitude = lon_dist(gen);
+    }
+
+    // 1. Поиск ближайшей точки без использования многопоточности
+    auto start_time = std::chrono::high_resolution_clock::now(); // Запоминаем время начала
+
+    Point nearest_point_no_threads; // Переменная для хранения ближайшей точки
+    double min_distance_no_threads = std::numeric_limits<double>::infinity(); // Инициализируем минимальное расстояние бесконечностью
+
+    // Поиск ближайшей точки
+    for (const auto& point : points) {
+        double distance = haversine_distance(point, target); // Вычисляем расстояние
+        if (distance < min_distance_no_threads) { // Если найдено меньшее расстояние
+            min_distance_no_threads = distance; // Обновляем минимальное расстояние
+            nearest_point_no_threads = point; // Обновляем ближайшую точку
+        }
+    }
+
+    auto end_time = std::chrono::high_resolution_clock::now(); // Запоминаем время окончания
+    auto duration_no_threads = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time); // Вычисляем длительность
+
+    // Вывод результатов поиска без многопоточности
+    std::cout << "\nБез многопоточности:\n";
+    std::cout << "Расстояние: " << min_distance_no_threads << " км\n";
+    std::cout << "Время выполнения: " << std::fixed << std::setprecision(7) << duration_no_threads.count() / 1000000.0 << " секунд\n";
+
+    // 2. Поиск ближайшей точки с использованием многопоточности
+    start_time = std::chrono::high_resolution_clock::now(); // Запоминаем время начала
+
+    Point nearest_point_with_threads; // Переменная для хранения ближайшей точки
+    double min_distance_with_threads = std::numeric_limits<double>::infinity(); // Инициализируем минимальное расстояние бесконечностью
+    std::vector<std::thread> threads; // Вектор для хранения потоков
+    std::vector<Point> nearest_points(num_threads);
+    std::vector<double> min_distances(num_threads, std::numeric_limits<double>::infinity());
+
+    int points_per_thread = n / num_threads; // Количество точек на поток
+
+    // Создание потоков для поиска ближайшей точки
+    for (int i = 0; i < num_threads; ++i) {
+        int start_idx = i * points_per_thread; // Начальный индекс для потока
+        int end_idx = (i == num_threads - 1) ? n : (i + 1) * points_per_thread; // Конечный индекс для потока
+
+        // Создаем поток и передаем необходимые параметры
+        threads.emplace_back(find_nearest_point, std::ref(points), std::ref(target), start_idx, end_idx, std::ref(nearest_points[i]), std::ref(min_distances[i]));
+    }
+
+    // Ожидаем завершения всех потоков
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // Находим минимальное расстояние среди результатов потоков
+    for (int i = 0; i < num_threads; ++i) {
+        if (min_distances[i] < min_distance_with_threads) {
+            min_distance_with_threads = min_distances[i];
+            nearest_point_with_threads = nearest_points[i];
+        }
+    }
+
+    end_time = std::chrono::high_resolution_clock::now(); // Запоминаем время окончания
+    auto duration_with_threads = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time); // Вычисляем длительность
+
+    // Вывод результатов поиска с многопоточностью
+    std::cout << "\nС многопоточностью:\n";
+    std::cout << "Расстояние: " << min_distance_with_threads << " км\n";
+    std::cout << "Время выполнения: " << std::fixed << std::setprecision(7) << duration_with_threads.count() / 1000000.0 << " секунд\n";
+
+    return 0;
+}
+
+
